@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Mapeador de Ambiente</title>
+    <style>
+        /* Estilo geral */
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f0f0f0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden; /* Evita rolagem da página */
+        }
+
+        /* Cabeçalho */
+        header {
+            background-color: #007bff;
+            color: white;
+            padding: 15px;
+            text-align: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+
+        header h1 {
+            margin: 0;
+            font-size: 1.5em;
+        }
+
+        /* Container principal */
+        .container {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+        }
+        
+        /* Status e instruções */
+        #status {
+            text-align: center;
+            padding: 10px;
+            font-size: 1em;
+            font-weight: bold;
+            background-color: #fff;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+        }
+
+        /* Área do mapa (canvas) */
+        #mapaCanvas {
+            border: 2px solid #333;
+            background-color: #fff;
+            cursor: crosshair;
+            touch-action: none; /* Essencial para evitar zoom/rolagem no toque */
+            width: 100%;
+            flex-grow: 1; /* Faz o canvas ocupar o espaço disponível */
+        }
+
+        /* Rodapé com os botões */
+        .controles {
+            display: flex;
+            justify-content: space-around;
+            padding: 10px;
+            background-color: #fff;
+            box-shadow: 0 -2px 5px rgba(0,0,0,0.1);
+        }
+
+        .controles button {
+            padding: 12px 20px;
+            font-size: 1em;
+            border: none;
+            border-radius: 8px;
+            color: white;
+            cursor: pointer;
+            flex-grow: 1;
+            margin: 0 5px;
+            transition: background-color 0.3s;
+        }
+        
+        #btnDesfazer {
+            background-color: #ffc107; /* Amarelo */
+        }
+        
+        #btnLimpar {
+            background-color: #dc3545; /* Vermelho */
+        }
+        
+        #btnDesfazer:hover {
+            background-color: #e0a800;
+        }
+
+        #btnLimpar:hover {
+            background-color: #c82333;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Mapeador de Ambiente</h1>
+    </header>
+
+    <div class="container">
+        <p id="status">Toque na tela para marcar o <b>início</b> da parede.</p>
+        <canvas id="mapaCanvas"></canvas>
+    </div>
+
+    <div class="controles">
+        <button id="btnDesfazer">Desfazer Última Parede</button>
+        <button id="btnLimpar">Limpar Tudo</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('mapaCanvas');
+        const ctx = canvas.getContext('2d');
+        const statusEl = document.getElementById('status');
+        const btnDesfazer = document.getElementById('btnDesfazer');
+        const btnLimpar = document.getElementById('btnLimpar');
+
+        let isDrawing = false;
+        let startPoint = null;
+        let walls = [];
+
+        // Função para ajustar o tamanho do canvas ao da tela
+        function resizeCanvas() {
+            // O canvas tem um tamanho de renderização (width/height) e um tamanho de exibição (style).
+            // Para evitar distorção, igualamos ambos ao tamanho real do container.
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+            redrawCanvas(); // Redesenha tudo ao redimensionar
+        }
+
+        // Função para redesenhar todo o mapa
+        function redrawCanvas() {
+            // Limpa completamente o canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Estilo das paredes
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round'; // Pontas das linhas arredondadas
+
+            // Desenha todas as paredes salvas no array
+            walls.forEach(wall => {
+                ctx.beginPath();
+                ctx.moveTo(wall.start.x, wall.start.y);
+                ctx.lineTo(wall.end.x, wall.end.y);
+                ctx.stroke();
+            });
+
+            // Se estiver no meio do desenho de uma parede, desenha o ponto inicial
+            if (isDrawing && startPoint) {
+                ctx.fillStyle = '#007bff';
+                ctx.beginPath();
+                ctx.arc(startPoint.x, startPoint.y, 6, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        }
+
+        // Função para obter as coordenadas do clique/toque no canvas
+        function getCoords(event) {
+            const rect = canvas.getBoundingClientRect();
+            // Verifica se é um evento de toque ou de mouse
+            const clientX = event.touches ? event.touches[0].clientX : event.clientX;
+            const clientY = event.touches ? event.touches[0].clientY : event.clientY;
+            
+            return {
+                x: clientX - rect.left,
+                y: clientY - rect.top
+            };
+        }
+
+        // Função principal que lida com o clique/toque
+        function handleCanvasInteraction(event) {
+            event.preventDefault(); // Evita comportamento padrão do navegador
+            const currentPoint = getCoords(event);
+
+            if (!isDrawing) {
+                // Inicia uma nova parede
+                startPoint = currentPoint;
+                isDrawing = true;
+                statusEl.innerHTML = 'Toque na tela para marcar o <b>fim</b> da parede.';
+            } else {
+                // Finaliza a parede atual
+                const newWall = { start: startPoint, end: currentPoint };
+                walls.push(newWall);
+                isDrawing = false;
+                startPoint = null;
+                statusEl.innerHTML = 'Toque na tela para marcar o <b>início</b> da próxima parede.';
+            }
+            redrawCanvas();
+        }
+        
+        // Event Listeners
+        canvas.addEventListener('mousedown', handleCanvasInteraction);
+        canvas.addEventListener('touchstart', handleCanvasInteraction);
+
+        btnDesfazer.addEventListener('click', () => {
+            if (walls.length > 0) {
+                walls.pop(); // Remove a última parede do array
+                isDrawing = false; // Cancela qualquer desenho em progresso
+                startPoint = null;
+                statusEl.innerHTML = 'Toque na tela para marcar o <b>início</b> da parede.';
+                redrawCanvas();
+            }
+        });
+        
+        btnLimpar.addEventListener('click', () => {
+            if (confirm('Tem certeza que deseja limpar todo o mapa?')) {
+                walls = [];
+                isDrawing = false;
+                startPoint = null;
+                statusEl.innerHTML = 'Toque na tela para marcar o <b>início</b> da parede.';
+                redrawCanvas();
+            }
+        });
+        
+        // Ajusta o canvas quando a janela é redimensionada ou a orientação muda
+        window.addEventListener('resize', resizeCanvas);
+        // Ajusta o canvas assim que a página carrega
+        window.addEventListener('load', resizeCanvas);
+
+    </script>
+</body>
+</html>
