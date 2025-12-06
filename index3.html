@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Mapeador com Sensores</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; background-color: #f0f0f0; }
+        header { background-color: #28a745; color: white; padding: 15px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        header h1 { margin: 0; font-size: 1.5em; }
+        .container { flex-grow: 1; display: flex; flex-direction: column; padding: 10px; }
+        #mapaCanvas { border: 2px solid #333; background-color: #fff; touch-action: none; width: 100%; flex-grow: 1; }
+        .controles { display: flex; flex-direction: column; padding: 10px; background-color: #fff; box-shadow: 0 -2px 5px rgba(0,0,0,0.1); }
+        .botoes { display: flex; justify-content: space-around; margin-bottom: 10px; }
+        .botoes button { padding: 12px; font-size: 1em; border: none; border-radius: 8px; color: white; cursor: pointer; flex-grow: 1; margin: 0 5px; transition: background-color 0.3s; }
+        #btnParede { background-color: #007bff; }
+        #btnParede.active { background-color: #dc3545; }
+        #btnDesfazer { background-color: #ffc107; }
+        #btnLimpar { background-color: #c82333; }
+        .status-sensores { text-align: center; font-size: 0.9em; padding: 5px; background-color: #e9ecef; border-radius: 5px; }
+        .config { display: flex; align-items: center; justify-content: center; margin-top: 10px; font-size: 0.9em; }
+        .config input { width: 60px; margin: 0 10px; text-align: center; }
+    </style>
+</head>
+<body>
+
+    <header><h1>Mapeador com Sensores</h1></header>
+
+    <div class="container">
+        <div class="status-sensores">
+            Direção: <b id="direcao">--</b>° | Passos: <b id="passos">0</b>
+        </div>
+        <canvas id="mapaCanvas"></canvas>
+    </div>
+
+    <div class="controles">
+        <div class="botoes">
+            <button id="btnParede">Iniciar Parede</button>
+            <button id="btnDesfazer">Desfazer</button>
+            <button id="btnLimpar">Limpar</button>
+        </div>
+        <div class="config">
+            <label for="stepLength">Tamanho do Passo (m):</label>
+            <input type="number" id="stepLength" value="0.75" step="0.01">
+            <label for="scale">Escala (px/m):</label>
+            <input type="number" id="scale" value="50" step="1">
+        </div>
+    </div>
+
+    <script>
+        // --- Elementos da UI ---
+        const canvas = document.getElementById('mapaCanvas');
+        const ctx = canvas.getContext('2d');
+        const btnParede = document.getElementById('btnParede');
+        const btnDesfazer = document.getElementById('btnDesfazer');
+        const btnLimpar = document.getElementById('btnLimpar');
+        const direcaoEl = document.getElementById('direcao');
+        const passosEl = document.getElementById('passos');
+        const stepLengthInput = document.getElementById('stepLength');
+        const scaleInput = document.getElementById('scale');
+
+        // --- Variáveis de Estado ---
+        let isMappingWall = false;
+        let walls = [];
+        let currentPosition = { x: 0, y: 0 };
+        let startAngle = 0;
+        let stepCount = 0;
+        let lastAccelMag = 0;
+        let stepThreshold = 10.5; // Sensibilidade do contador de passos
+
+        // --- Funções de Desenho ---
+        function resizeCanvas() {
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+            // Centraliza o ponto de partida
+            currentPosition = { x: canvas.width / 2, y: canvas.height / 2 };
+            redrawCanvas();
+        }
+
+        function redrawCanvas() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round';
+            
+            let pos = { x: canvas.width / 2, y: canvas.height / 2 };
+
+            // Ponto inicial
+            ctx.fillStyle = 'green';
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, 8, 0, 2 * Math.PI);
+            ctx.fill();
+
+            walls.forEach(wall => {
+                ctx.beginPath();
+                ctx.moveTo(pos.x, pos.y);
+                const distance = wall.steps * wall.stepLength * wall.scale;
+                const angleRad = (wall.angle - 90) * (Math.PI / 180); // Ajuste para o sistema de coordenadas do canvas
+                
+                pos.x += distance * Math.cos(angleRad);
+                pos.y += distance * Math.sin(angleRad);
+                
+                ctx.lineTo(pos.x, pos.y);
+                ctx.stroke();
+            });
+            
+            // Ponto atual
+            ctx.fillStyle = 'red';
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, 8, 0, 2 * Math.PI);
+            ctx.fill();
+        }
+
+        // --- Lógica dos Sensores ---
+        function requestSensorPermissions() {
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                DeviceOrientationEvent.requestPermission()
+                    .then(permissionState => {
+                        if (permissionState === 'granted') {
+                            window.addEventListener('deviceorientation', handleOrientation);
+                        }
+                    })
+                    .catch(console.error);
+            } else {
+                window.addEventListener('deviceorientation', handleOrientation);
+            }
+
+            if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+                DeviceMotionEvent.requestPermission()
+                    .then(permissionState => {
+                        if (permissionState === 'granted') {
+                            window.addEventListener('devicemotion', handleMotion);
+                        }
+                    })
+                    .catch(console.error);
+            } else {
+                window.addEventListener('devicemotion', handleMotion);
+            }
+        }
+        
+        function handleOrientation(event) {
+            // event.alpha é a direção em graus (0-360), onde 0 é o Norte
+            if (event.webkitCompassHeading) { // Para iOS
+                 direcaoEl.textContent = Math.round(event.webkitCompassHeading);
+            } else {
+                 direcaoEl.textContent = event.alpha ? Math.round(360 - event.alpha) : '--';
+            }
+        }
+
+        function handleMotion(event) {
+            if (!isMappingWall) return;
+
+            const accel = event.accelerationIncludingGravity;
+            const mag = Math.sqrt(accel.x * accel.x + accel.y * accel.y + accel.z * accel.z);
+            
+            // Algoritmo simples de detecção de passo (pico de aceleração)
+            if (lastAccelMag < stepThreshold && mag > stepThreshold) {
+                stepCount++;
+                passosEl.textContent = stepCount;
+            }
+            lastAccelMag = mag;
+        }
+
+        // --- Controle de Botões ---
+        btnParede.addEventListener('click', () => {
+            if (!isMappingWall) {
+                // Iniciar mapeamento da parede
+                requestSensorPermissions(); // Pede permissão na primeira vez
+                isMappingWall = true;
+                btnParede.textContent = 'Finalizar Parede';
+                btnParede.classList.add('active');
+                
+                startAngle = direcaoEl.textContent === '--' ? 0 : parseFloat(direcaoEl.textContent);
+                stepCount = 0;
+                passosEl.textContent = '0';
+
+            } else {
+                // Finalizar mapeamento da parede
+                isMappingWall = false;
+                btnParede.textContent = 'Iniciar Parede';
+                btnParede.classList.remove('active');
+
+                const newWall = {
+                    angle: startAngle,
+                    steps: stepCount,
+                    stepLength: parseFloat(stepLengthInput.value),
+                    scale: parseFloat(scaleInput.value)
+                };
+                walls.push(newWall);
+                redrawCanvas();
+            }
+        });
+        
+        btnDesfazer.addEventListener('click', () => {
+            if (walls.length > 0) {
+                walls.pop();
+                redrawCanvas();
+            }
+        });
+
+        btnLimpar.addEventListener('click', () => {
+            if (confirm('Tem certeza que deseja limpar o mapa?')) {
+                walls = [];
+                isMappingWall = false;
+                btnParede.textContent = 'Iniciar Parede';
+                btnParede.classList.remove('active');
+                stepCount = 0;
+                passosEl.textContent = '0';
+                resizeCanvas(); // Reseta para o centro
+            }
+        });
+
+        // --- Inicialização ---
+        window.addEventListener('resize', resizeCanvas);
+        window.addEventListener('load', resizeCanvas);
+
+    </script>
+</body>
+</html>
