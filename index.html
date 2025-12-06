@@ -2,178 +2,229 @@
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Mapeador Indoor Web</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Mapeador de Ambiente</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; color: white; }
-        canvas { display: block; width: 100vw; height: 100vh; }
-        #controls {
-            position: absolute; bottom: 20px; left: 0; width: 100%;
-            display: flex; flex-direction: column; align-items: center; gap: 10px;
-            pointer-events: none; /* Deixa tocar no canvas se precisar */
+        /* Estilo geral */
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f0f0f0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden; /* Evita rolagem da página */
         }
-        button {
-            pointer-events: auto;
-            padding: 15px 30px; border: none; border-radius: 50px;
-            font-size: 16px; font-weight: bold; cursor: pointer;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+
+        /* Cabeçalho */
+        header {
+            background-color: #007bff;
+            color: white;
+            padding: 15px;
+            text-align: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
         }
-        #btnWall {
-            background-color: #ff4444; color: white; width: 80%; height: 80px;
-            display: none; /* Escondido até dar permissão */
+
+        header h1 {
+            margin: 0;
+            font-size: 1.5em;
         }
-        #btnWall.active { background-color: #ff0000; border: 4px solid white; }
-        #btnStart { background-color: #00cc66; color: white; }
-        #info {
-            position: absolute; top: 10px; left: 10px;
-            background: rgba(0,0,0,0.5); padding: 5px; border-radius: 5px;
+
+        /* Container principal */
+        .container {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+        }
+        
+        /* Status e instruções */
+        #status {
+            text-align: center;
+            padding: 10px;
+            font-size: 1em;
+            font-weight: bold;
+            background-color: #fff;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+        }
+
+        /* Área do mapa (canvas) */
+        #mapaCanvas {
+            border: 2px solid #333;
+            background-color: #fff;
+            cursor: crosshair;
+            touch-action: none; /* Essencial para evitar zoom/rolagem no toque */
+            width: 100%;
+            flex-grow: 1; /* Faz o canvas ocupar o espaço disponível */
+        }
+
+        /* Rodapé com os botões */
+        .controles {
+            display: flex;
+            justify-content: space-around;
+            padding: 10px;
+            background-color: #fff;
+            box-shadow: 0 -2px 5px rgba(0,0,0,0.1);
+        }
+
+        .controles button {
+            padding: 12px 20px;
+            font-size: 1em;
+            border: none;
+            border-radius: 8px;
+            color: white;
+            cursor: pointer;
+            flex-grow: 1;
+            margin: 0 5px;
+            transition: background-color 0.3s;
+        }
+        
+        #btnDesfazer {
+            background-color: #ffc107; /* Amarelo */
+        }
+        
+        #btnLimpar {
+            background-color: #dc3545; /* Vermelho */
+        }
+        
+        #btnDesfazer:hover {
+            background-color: #e0a800;
+        }
+
+        #btnLimpar:hover {
+            background-color: #c82333;
         }
     </style>
 </head>
 <body>
 
-    <div id="info">Passos: 0 | Direção: 0°</div>
-    <canvas id="mapCanvas"></canvas>
+    <header>
+        <h1>Mapeador de Ambiente</h1>
+    </header>
 
-    <div id="controls">
-        <button id="btnStart">INICIAR SENSORES</button>
-        <button id="btnWall">SEGURE P/ PAREDE</button>
+    <div class="container">
+        <p id="status">Toque na tela para marcar o <b>início</b> da parede.</p>
+        <canvas id="mapaCanvas"></canvas>
+    </div>
+
+    <div class="controles">
+        <button id="btnDesfazer">Desfazer Última Parede</button>
+        <button id="btnLimpar">Limpar Tudo</button>
     </div>
 
     <script>
-        const canvas = document.getElementById('mapCanvas');
+        const canvas = document.getElementById('mapaCanvas');
         const ctx = canvas.getContext('2d');
-        const btnStart = document.getElementById('btnStart');
-        const btnWall = document.getElementById('btnWall');
-        const infoDiv = document.getElementById('info');
+        const statusEl = document.getElementById('status');
+        const btnDesfazer = document.getElementById('btnDesfazer');
+        const btnLimpar = document.getElementById('btnLimpar');
 
-        // Configuração do Mapa
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-        
-        let posX = canvas.width / 2;
-        let posY = canvas.height / 2;
-        let azimuth = 0; // Direção em radianos
-        let stepCount = 0;
-        let isBuildingWall = false;
+        let isDrawing = false;
+        let startPoint = null;
+        let walls = [];
 
-        // Histórico de paredes [ [x1, y1, x2, y2], ... ]
-        const walls = [];
-
-        // Variáveis para detecção de passos
-        let lastAccel = 0;
-        const stepThreshold = 11; // Ajuste a sensibilidade (m/s²)
-        const stepLength = 25; // Pixels por passo
-
-        // --- LÓGICA DE DESENHO ---
-        function draw() {
-            // Limpa a tela
-            ctx.fillStyle = '#000';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-            // Desenha Paredes
-            ctx.strokeStyle = '#0f0';
-            ctx.lineWidth = 4;
-            ctx.beginPath();
-            walls.forEach(w => {
-                ctx.moveTo(w[0], w[1]);
-                ctx.lineTo(w[2], w[3]);
-            });
-            ctx.stroke();
-
-            // Desenha Jogador
-            ctx.fillStyle = 'red';
-            ctx.beginPath();
-            ctx.arc(posX, posY, 10, 0, Math.PI * 2);
-            ctx.fill();
-
-            // Desenha seta de direção
-            ctx.strokeStyle = 'white';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.moveTo(posX, posY);
-            ctx.lineTo(posX + Math.sin(azimuth) * 30, posY - Math.cos(azimuth) * 30);
-            ctx.stroke();
-
-            requestAnimationFrame(draw);
+        // Função para ajustar o tamanho do canvas ao da tela
+        function resizeCanvas() {
+            // O canvas tem um tamanho de renderização (width/height) e um tamanho de exibição (style).
+            // Para evitar distorção, igualamos ambos ao tamanho real do container.
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+            redrawCanvas(); // Redesenha tudo ao redimensionar
         }
-        draw();
 
-        // --- CONTROLES ---
-        
-        // Permissão de Sensores (Necessário para iOS 13+ e alguns Androids)
-        btnStart.addEventListener('click', async () => {
-            if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-                try {
-                    const response = await DeviceOrientationEvent.requestPermission();
-                    if (response === 'granted') {
-                        startSensors();
-                    } else {
-                        alert('Permissão negada. Não é possível mapear.');
-                    }
-                } catch (e) {
-                    console.error(e);
-                }
+        // Função para redesenhar todo o mapa
+        function redrawCanvas() {
+            // Limpa completamente o canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Estilo das paredes
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round'; // Pontas das linhas arredondadas
+
+            // Desenha todas as paredes salvas no array
+            walls.forEach(wall => {
+                ctx.beginPath();
+                ctx.moveTo(wall.start.x, wall.start.y);
+                ctx.lineTo(wall.end.x, wall.end.y);
+                ctx.stroke();
+            });
+
+            // Se estiver no meio do desenho de uma parede, desenha o ponto inicial
+            if (isDrawing && startPoint) {
+                ctx.fillStyle = '#007bff';
+                ctx.beginPath();
+                ctx.arc(startPoint.x, startPoint.y, 6, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        }
+
+        // Função para obter as coordenadas do clique/toque no canvas
+        function getCoords(event) {
+            const rect = canvas.getBoundingClientRect();
+            // Verifica se é um evento de toque ou de mouse
+            const clientX = event.touches ? event.touches[0].clientX : event.clientX;
+            const clientY = event.touches ? event.touches[0].clientY : event.clientY;
+            
+            return {
+                x: clientX - rect.left,
+                y: clientY - rect.top
+            };
+        }
+
+        // Função principal que lida com o clique/toque
+        function handleCanvasInteraction(event) {
+            event.preventDefault(); // Evita comportamento padrão do navegador
+            const currentPoint = getCoords(event);
+
+            if (!isDrawing) {
+                // Inicia uma nova parede
+                startPoint = currentPoint;
+                isDrawing = true;
+                statusEl.innerHTML = 'Toque na tela para marcar o <b>fim</b> da parede.';
             } else {
-                // Navegadores que não pedem permissão (Android antigo/Chrome)
-                startSensors();
+                // Finaliza a parede atual
+                const newWall = { start: startPoint, end: currentPoint };
+                walls.push(newWall);
+                isDrawing = false;
+                startPoint = null;
+                statusEl.innerHTML = 'Toque na tela para marcar o <b>início</b> da próxima parede.';
+            }
+            redrawCanvas();
+        }
+        
+        // Event Listeners
+        canvas.addEventListener('mousedown', handleCanvasInteraction);
+        canvas.addEventListener('touchstart', handleCanvasInteraction);
+
+        btnDesfazer.addEventListener('click', () => {
+            if (walls.length > 0) {
+                walls.pop(); // Remove a última parede do array
+                isDrawing = false; // Cancela qualquer desenho em progresso
+                startPoint = null;
+                statusEl.innerHTML = 'Toque na tela para marcar o <b>início</b> da parede.';
+                redrawCanvas();
             }
         });
-
-        // Botão de Parede (Lógica de segurar)
-        btnWall.addEventListener('touchstart', (e) => { e.preventDefault(); isBuildingWall = true; btnWall.classList.add('active'); });
-        btnWall.addEventListener('touchend', (e) => { e.preventDefault(); isBuildingWall = false; btnWall.classList.remove('active'); });
-        btnWall.addEventListener('mousedown', () => { isBuildingWall = true; btnWall.classList.add('active'); });
-        btnWall.addEventListener('mouseup', () => { isBuildingWall = false; btnWall.classList.remove('active'); });
-
-        function startSensors() {
-            btnStart.style.display = 'none';
-            btnWall.style.display = 'block';
-
-            // 1. Ouvir a Bússola (DeviceOrientation)
-            window.addEventListener('deviceorientation', (event) => {
-                // alpha é a direção da bússola em graus (0-360)
-                if(event.alpha) {
-                    // Converter para radianos
-                    azimuth = event.alpha * (Math.PI / 180);
-                    infoDiv.innerText = `Passos: ${stepCount} | Direção: ${Math.round(event.alpha)}°`;
-                }
-            });
-
-            // 2. Ouvir o Acelerômetro (DeviceMotion)
-            window.addEventListener('devicemotion', (event) => {
-                const acc = event.accelerationIncludingGravity;
-                if (!acc) return;
-
-                // Magnitude do vetor de aceleração
-                const magnitude = Math.sqrt(acc.x*acc.x + acc.y*acc.y + acc.z*acc.z);
-
-                // Detectar pico (passo)
-                // Lógica simples: Se a força passar do limite e cair, é um passo
-                if (magnitude > stepThreshold && lastAccel <= stepThreshold) {
-                    registerStep();
-                }
-                lastAccel = magnitude;
-            });
-        }
-
-        function registerStep() {
-            // Calcular nova posição
-            const oldX = posX;
-            const oldY = posY;
-
-            // Math.sin/cos usam radianos. 
-            // No canvas, Y cresce para baixo, então subtraímos o cos para ir "para frente/cima"
-            posX += Math.sin(azimuth) * stepLength;
-            posY -= Math.cos(azimuth) * stepLength;
-
-            stepCount++;
-
-            // Se estiver segurando o botão, salva a parede
-            if (isBuildingWall) {
-                walls.push([oldX, oldY, posX, posY]);
+        
+        btnLimpar.addEventListener('click', () => {
+            if (confirm('Tem certeza que deseja limpar todo o mapa?')) {
+                walls = [];
+                isDrawing = false;
+                startPoint = null;
+                statusEl.innerHTML = 'Toque na tela para marcar o <b>início</b> da parede.';
+                redrawCanvas();
             }
-        }
+        });
+        
+        // Ajusta o canvas quando a janela é redimensionada ou a orientação muda
+        window.addEventListener('resize', resizeCanvas);
+        // Ajusta o canvas assim que a página carrega
+        window.addEventListener('load', resizeCanvas);
 
     </script>
 </body>
