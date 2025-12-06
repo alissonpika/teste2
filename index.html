@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Mapeador Indoor Web</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; color: white; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        #controls {
+            position: absolute; bottom: 20px; left: 0; width: 100%;
+            display: flex; flex-direction: column; align-items: center; gap: 10px;
+            pointer-events: none; /* Deixa tocar no canvas se precisar */
+        }
+        button {
+            pointer-events: auto;
+            padding: 15px 30px; border: none; border-radius: 50px;
+            font-size: 16px; font-weight: bold; cursor: pointer;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+        #btnWall {
+            background-color: #ff4444; color: white; width: 80%; height: 80px;
+            display: none; /* Escondido até dar permissão */
+        }
+        #btnWall.active { background-color: #ff0000; border: 4px solid white; }
+        #btnStart { background-color: #00cc66; color: white; }
+        #info {
+            position: absolute; top: 10px; left: 10px;
+            background: rgba(0,0,0,0.5); padding: 5px; border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="info">Passos: 0 | Direção: 0°</div>
+    <canvas id="mapCanvas"></canvas>
+
+    <div id="controls">
+        <button id="btnStart">INICIAR SENSORES</button>
+        <button id="btnWall">SEGURE P/ PAREDE</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('mapCanvas');
+        const ctx = canvas.getContext('2d');
+        const btnStart = document.getElementById('btnStart');
+        const btnWall = document.getElementById('btnWall');
+        const infoDiv = document.getElementById('info');
+
+        // Configuração do Mapa
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        let posX = canvas.width / 2;
+        let posY = canvas.height / 2;
+        let azimuth = 0; // Direção em radianos
+        let stepCount = 0;
+        let isBuildingWall = false;
+
+        // Histórico de paredes [ [x1, y1, x2, y2], ... ]
+        const walls = [];
+
+        // Variáveis para detecção de passos
+        let lastAccel = 0;
+        const stepThreshold = 11; // Ajuste a sensibilidade (m/s²)
+        const stepLength = 25; // Pixels por passo
+
+        // --- LÓGICA DE DESENHO ---
+        function draw() {
+            // Limpa a tela
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Desenha Paredes
+            ctx.strokeStyle = '#0f0';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            walls.forEach(w => {
+                ctx.moveTo(w[0], w[1]);
+                ctx.lineTo(w[2], w[3]);
+            });
+            ctx.stroke();
+
+            // Desenha Jogador
+            ctx.fillStyle = 'red';
+            ctx.beginPath();
+            ctx.arc(posX, posY, 10, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Desenha seta de direção
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(posX, posY);
+            ctx.lineTo(posX + Math.sin(azimuth) * 30, posY - Math.cos(azimuth) * 30);
+            ctx.stroke();
+
+            requestAnimationFrame(draw);
+        }
+        draw();
+
+        // --- CONTROLES ---
+        
+        // Permissão de Sensores (Necessário para iOS 13+ e alguns Androids)
+        btnStart.addEventListener('click', async () => {
+            if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+                try {
+                    const response = await DeviceOrientationEvent.requestPermission();
+                    if (response === 'granted') {
+                        startSensors();
+                    } else {
+                        alert('Permissão negada. Não é possível mapear.');
+                    }
+                } catch (e) {
+                    console.error(e);
+                }
+            } else {
+                // Navegadores que não pedem permissão (Android antigo/Chrome)
+                startSensors();
+            }
+        });
+
+        // Botão de Parede (Lógica de segurar)
+        btnWall.addEventListener('touchstart', (e) => { e.preventDefault(); isBuildingWall = true; btnWall.classList.add('active'); });
+        btnWall.addEventListener('touchend', (e) => { e.preventDefault(); isBuildingWall = false; btnWall.classList.remove('active'); });
+        btnWall.addEventListener('mousedown', () => { isBuildingWall = true; btnWall.classList.add('active'); });
+        btnWall.addEventListener('mouseup', () => { isBuildingWall = false; btnWall.classList.remove('active'); });
+
+        function startSensors() {
+            btnStart.style.display = 'none';
+            btnWall.style.display = 'block';
+
+            // 1. Ouvir a Bússola (DeviceOrientation)
+            window.addEventListener('deviceorientation', (event) => {
+                // alpha é a direção da bússola em graus (0-360)
+                if(event.alpha) {
+                    // Converter para radianos
+                    azimuth = event.alpha * (Math.PI / 180);
+                    infoDiv.innerText = `Passos: ${stepCount} | Direção: ${Math.round(event.alpha)}°`;
+                }
+            });
+
+            // 2. Ouvir o Acelerômetro (DeviceMotion)
+            window.addEventListener('devicemotion', (event) => {
+                const acc = event.accelerationIncludingGravity;
+                if (!acc) return;
+
+                // Magnitude do vetor de aceleração
+                const magnitude = Math.sqrt(acc.x*acc.x + acc.y*acc.y + acc.z*acc.z);
+
+                // Detectar pico (passo)
+                // Lógica simples: Se a força passar do limite e cair, é um passo
+                if (magnitude > stepThreshold && lastAccel <= stepThreshold) {
+                    registerStep();
+                }
+                lastAccel = magnitude;
+            });
+        }
+
+        function registerStep() {
+            // Calcular nova posição
+            const oldX = posX;
+            const oldY = posY;
+
+            // Math.sin/cos usam radianos. 
+            // No canvas, Y cresce para baixo, então subtraímos o cos para ir "para frente/cima"
+            posX += Math.sin(azimuth) * stepLength;
+            posY -= Math.cos(azimuth) * stepLength;
+
+            stepCount++;
+
+            // Se estiver segurando o botão, salva a parede
+            if (isBuildingWall) {
+                walls.push([oldX, oldY, posX, posY]);
+            }
+        }
+
+    </script>
+</body>
+</html>
